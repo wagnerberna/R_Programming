@@ -1,0 +1,717 @@
+---
+title: "Regressão múltipla"
+author: "Marcelo Osnar Rodrigues de Abreu"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    toc: yes
+    highlight: github
+---
+
+
+```{r message=FALSE, warning=FALSE}
+# rm(list = ls())
+library(MASS)
+library(caret)
+library(broom)
+library(dplyr)
+library(plotly)
+library(glmulti)
+library(kableExtra)
+library(summarytools)
+```
+
+
+
+# Introdução
+
+
+Vamos trabalho com um conjunto de dados de expectativa de vida de 193 países no período de 2000 a 2015. 
+
+
+
+
+Temos 22 variáveis e 2938 observações. As variáveis são
+
+* **Country:** países;
+* **Year:** anos;
+* **Status:** se o país é desenvolvido ou está em desenvolvimento;
+* **Life.expectancy:** expectativa de vida;
+* **Adult.Mortality:** taxa de mortalidade de ambos os sexos (dada pela probabilidade de falecer entre os 15 e os 60 anos, por mil habitantes);
+* **infant.deaths:** mortalidade infantil por mil habitantes;
+* **Country:** consumo de álcool per capita (15+) medido em litros de álcool puro;
+* **percentage.expenditure:** gastos com saúde em porcentagem do PIB per capita;
+* **Hepatitis.B:** cobertura da imunização contra hepatite B entre crianças de 1 ano (%);
+* **Measles:** número de casos de sarampo notificados por 1mil habitantes;
+* **BMI:** índice de massa corporal medio de toda a população;
+* **under.five.deaths:** número de mortes de menores de cinco anos por 1000 habitantes;
+* **Polio:** cobertura de imunização contra poliomielite (Pol3) entre crianças de 1 ano (%);
+* **Total.expenditure:** gastos do governo geral com saúde como uma porcentagem dos gastos totais do governo (%)
+* **Diphtheria:** cobertura de imunização de toxóide tetânico diftérico e coqueluche (DTP3) entre crianças de 1 ano de idade (%);
+* **HIV.AIDS:** mortes por 1.000 nascidos vivos HIV / AIDS (0-4 anos);
+* **GDP:** produto interno bruto per capita (em dólares americanos);
+* **Population:** população do país;
+* **thinness..1.19.years:** prevalência de magreza entre crianças e adolescentes de 10 a 19 anos (%);
+* **thinness.5.9.years:** prevalência de magreza entre crianças de 5 a 9 anos (%);
+* **Income.composition.of.resources:** Índice de Desenvolvimento Humano em termos de composição da renda dos recursos (índice que varia de 0 a 1);
+* **Schooling:** Número de anos de escolaridade (anos).
+
+
+
+# Objetivos
+
+Usar regressão linear múltipla para predizer a espectativa de vida.
+
+
+# 1. Leitura e avaliação da qualidade dos dados
+
+### Leitura dos dados
+```{r}
+df <- read.csv2('life.csv', sep = ',')
+df <- df %>% relocate(Life.expectancy, .after = last_col())
+str(df)
+```
+Podemos ver que algumas das variáveis numéricas estão como caracter. Vamos resolver isto, mas antes de fazer a conversão vamos contar o número de NA's (quando não é possível converter para numeric NA é inserido)
+
+
+### Quantidade de NA
+```{r}
+df.NA <- apply(df, 2, function(x) sum(is.na(x)))
+df.NA[which(df.NA != 0)] %>% kbl() %>% kable_styling() 
+```
+
+Temos quatro variáveis com NA, sendo uma delas bem preocupante por conter 553 valores perdidos dentre 2938 observações (18,8%). 
+
+### Veriaficando entradas vazias
+
+Pode ocorrer de em algumas células vazias sejam lidas como um texto vazio da forma `''`. Vamos verificar este fato
+```{r}
+df.blank <- apply(df, 2, function(x) length(which(x == '')))
+df.blank[which(df.blank != 0)] %>% kbl() %>% kable_styling() 
+```
+Temos 10 variáveis com valores faltantes sendo a população e o GPD as variáveis mais afetadas.
+
+
+### Convertendo para numeric
+```{r}
+df[, -c(1,3)] <- apply(df[, -c(1,3)], 2, as.numeric)
+df.all.NA <- apply(df, 2, function(x) sum(is.na(x)))
+df.all.NA[which(df.all.NA != 0)] %>% kbl() %>% kable_styling() 
+```
+Agora temos NA em 14 variáveis.
+
+### Inputando valores
+
+Podemos ver que se eliminarmos todas as linhas que contém ao menos um valor perdido iremos eliminar cerca de 44% dos dados
+```{r}
+length(which(apply(is.na(df), 1, any)))
+```
+Além disso, para o mesmo país algumas informações estão disponíveis em alguns anos e em outros não. Por exemplo:
+```{r}
+aux <- select(filter(df, Country == 'Antigua and Barbuda'), c('Country', 'Year', 'Alcohol'))
+aux %>% kbl() %>% kable_styling() 
+```
+Nestes casos vamos imputar a mediana dos valores. 
+
+
+
+
+
+# Substitui os NA por valores correspondentes ao País
+```{r eval=FALSE, message=FALSE, warning=FALSE}
+# A ideia é substituir valores faltantes dos países por valores relacionados ao mesmo
+
+for (i in 1:nrow(df)) {                                          #percorre as linhas
+  for (j in 4:22) {                                              #percorre as colunas
+    a <- is.na(df[i,j])                                       #verifica se a entrada é NA
+    if(a == TRUE){
+      nome.pais   <- df$Country[i]                               #nome do país
+      linhas.pais <- filter(df, Country == nome.pais)            #todas as ocorrencias do pais
+      df[i,j]     <- median(linhas.pais[,j], na.rm = TRUE)       #preenche com a mediana
+    }
+  }
+}
+
+
+```
+
+
+### Nova quantidade de NA
+```{r}
+df.all.NA2 <- apply(df, 2, function(x) sum(is.na(x)))
+df.all.NA2[which(df.all.NA2 != 0)] %>% kbl() %>% kable_styling() 
+```
+
+
+### Removando linhas com NA
+```{r}
+rowNAidx <- apply(is.na(df), 1, any)
+nrow(df)
+df2      <- df[!rowNAidx, ]
+nrow(df2)
+cat(100*(nrow(df) - nrow(df2)) / nrow(df), '%', sep = '')
+```
+Houve uma redução de 27,57% das amostras. 
+
+
+
+### Range das variáveis
+
+```{r}
+t(summary(df2)) #%>% kbl() %>% kable_styling() 
+```
+
+Algumas variáveis aparentam ter outliers, por exemplo: **infant.deaths** são mortes por 1000 habitantes, não podendo ser maior que mil. Da mesma forma, **Measles** e **under.five.deaths** são em relação a 1000 habitantes. A variável **percentage.expenditure** deve conter uma porcentagem do PIB per capita, 18961,35 uma muito alto (no entanto devido a desigualdades sociais e extrema pobreza de alguns países, estes valores podem estar corretos). A variável (BMI) também contém valores aparentemente muito alto.
+
+
+### Histogramas
+```{r fig.height=4}
+for(i in c(2,4:ncol(df2))){
+  hist(df2[,i], main = paste('Histogram of', colnames(df2)[i]), xlab = colnames(df2)[i])
+
+}
+```
+
+* As variáveis **Total.expenditure, Income.composition.of.resources** e **Schooling** são normalmente distribuídas.
+
+
+
+Pelos histogramas podemos ver que as variáveis **infant.deaths** e **under.five.deaths** possuem poucos valores acima de 1000. Já em **Measles** pode ser muitos.
+
+```{r}
+nrow(filter(df2, infant.deaths > 1000))
+nrow(filter(df2, Measles > 1000))
+nrow(filter(df2, under.five.deaths > 1000))
+```
+
+Podemos eliminar as linhas que contém estes valores, no entanto iremos eliminar ao menos 410 amostras.
+
+Vamos olhar com mais detalhes a distruição de **Measles** para valores próximos de 1000.
+
+```{r}
+aux <- filter(df2, Measles >500 & Measles < 1000)
+hist(aux$Measles)
+nrow(aux)
+```
+
+### Vamos eliminar a variável  **Measles** e as linhas com **infant.deaths** ou **under.five.deaths** acima de 1000
+```{r}
+df3 <- filter(df2, infant.deaths <= 1000 & under.five.deaths <= 1000)
+df3 <- df3[, !colnames(df2) %in% c('Measles')]
+```
+
+O conjunto de dados agora tem 21 variáveis (20 preditoras) e 2112 amostras.
+
+
+### Vamos verificar as correlações
+
+
+```{r}
+corelacao <- DescTools::PairApply(df3, DescTools::CramerV)
+```
+
+```{r fig.height=10, fig.width=10}
+corrplot::corrplot(corelacao)
+```
+Muitos variáveis estão correlacionadas, vamos eliminar algumas.
+
+
+### Identificando colunas a serem removidas (correlação > .75)
+```{r}
+highlyCor <- caret::findCorrelation(corelacao, names = T, cutoff = 0.75)
+highlyCor 
+```
+
+```{r}
+df4 <- df3[, !colnames(df3) %in% highlyCor]
+```
+
+```{r}
+corelacao <- DescTools::PairApply(df4, DescTools::CramerV)
+```
+
+```{r fig.height=10, fig.width=10}
+corrplot::corrplot(corelacao)
+```
+
+
+
+# 2. Divisão entre treinamento e teste
+
+
+```{r}
+indices     <- createDataPartition(df4$Life.expectancy, p = 0.75)[[1]]
+treinamento <- df4[indices,]   # dados de treinamento
+teste       <- df4[-indices, ] # dados de teste
+```
+
+#### Uma vez feita esta divisão, salvamos estes dados para garantir evitar que novas execuções do código criassem partições distintas e treinassemos os modelos em conjuntos dintintos.
+
+
+```{r}
+### Salvando os dados de treinamento
+saveRDS(treinamento, file = "treinamento.rds")
+```
+
+
+```{r echo=TRUE}
+### Leitura dos dados de treinamento
+treinamento <- readRDS("treinamento.rds")
+```
+
+
+
+```{r}
+### Salvando os dados de teste
+saveRDS(teste, file = "teste.rds")
+```
+
+
+```{r echo=TRUE}
+### Leitura dos dados de teste
+teste <- readRDS("teste.rds")
+```
+
+
+
+
+# 3. Identificando os melhores modelos
+
+Vamos usar os dados de treinamento para ajustar alguns modelos.
+
+```{r}
+completo    <- lm(Life.expectancy ~ ., data = treinamento)
+nulo        <- lm(Life.expectancy ~ 1, data = treinamento)
+```
+
+## 3.1 Stepwise (forward)
+
+
+```{r}
+fwd <- stepAIC(nulo, direction = "forward", 
+               scope = list(lower = nulo, upper = completo), trace = T)
+```
+
+
+```{r}
+summary(fwd)
+```
+
+Considerando um nível de significância $\alpha=0,05$ apenas a variável **Total.expenditure** não foi significativa (e alguns países). Temos um $R^2$ ajustado de 0.9586, que indica que o modelo explica 95,86% da variação dos dados e o valor$-p$ de $2,2\cdot 10^{-16}$ indica que o modelo está adequado. 
+
+
+
+## 3.2 Stepwise (backward)
+
+
+```{r}
+back <- stepAIC(completo, direction = "backward", 
+                scope = list(lower = nulo, upper = completo), trace = T)
+```
+
+Chegamos no mesmo modelo que em forward.
+
+
+
+## 3.3 Stepwise (both)
+
+```{r}
+stepwise <- stepAIC(completo, direction = "both", 
+                    scope = list(lower = nulo, upper = completo), trace = T)
+```
+
+
+Novamente obtemos o mesmo modelo que em forward e backward.
+
+
+
+## 3.4 Melhor modelo usando algoritmo genético
+```{r}
+glm <- glmulti(Life.expectancy ~., data = treinamento, method = 'g', level = 1)
+```
+
+```{r}
+saveRDS(glm, file = "glm.rds")
+```
+
+
+```{r}
+glm <- readRDS("glm.rds")
+```
+
+```{r}
+summary(glm)
+```
+
+Mias uma vez chegamos no mesmo conjunto de variáveis.
+
+
+
+# 4 Modelo final
+
+A fim de comparação, vamos comparar o modelo com as variáveis selecionadas na seção anterior com o modelo completo.
+
+### Treinamento
+```{r}
+reg <- lm(Life.expectancy ~ Country + Year + Adult.Mortality + infant.deaths 
+          + Polio + Total.expenditure + HIV.AIDS + Schooling, data = treinamento)
+summary(reg)
+```
+Analisando os coeficientes podemos ver que o passar dos anos contribui para o aumento da expectativa de vida, assim como quanto maior for os anos de escolaridade maior a expectativa de vida. Por outro lado, a mortalidade adulta e infaltil bem como a infecção por HIV reduzem a expectativa de vida. O coeficiente de poliomielite está próximo de zero assim como os gastos com saúde, sendo que esta última variável não é significativa considerando significância $\alpha=0,05$. 
+
+
+### Teste
+```{r}
+pred          <- predict(reg, newdata = teste[, -ncol(teste)])
+pred.completo <- predict(completo, newdata = teste[, -ncol(teste)])
+mean((pred - teste$Life.expectancy)^2)
+mean((pred.completo - teste$Life.expectancy)^2)
+```
+O modelo completo tem erro quadrático medio um pouco menor, mas a diferença é pequena. Além disso, para o modelo completo $R^2$ ajustado é `r summary(completo)$adj.r.squared` que está bem próximo do $R^2$ ajustado do modelo com seleção de variáveis que é `r summary(reg)$adj.r.squared`. Neste caso o modelo com seleção de variáveis pode ser adotado uma vez que usa apenas oito dos 20 preditores. 
+
+
+
+
+# 5 Avaliação do modelo
+
+# 5.1 Outliers
+
+
+### Distância de Cook
+```{r}
+plot(reg, which = 4, id.n = 3)
+```
+Pontos com distância de Cook maior do que $\dfrac{4}{n}$ onde $n$ é o número de observações, são potenciais outliers.
+
+```{r}
+aux <- cooks.distance(reg)
+length(aux[which(aux > (4 / nrow(treinamento)))])
+```
+Temos 104 possíveis outliers.
+
+### Plot dos resíduos
+Resíduos (de student) com valor absoluto maior que 3 são pontos influentes
+```{r}
+model.data <- augment(reg) %>% mutate(index = 1:n())
+ggplot(model.data, aes(index, .std.resid)) + 
+  geom_point(aes(color = Life.expectancy), alpha = .5) +
+  theme_bw()
+```
+Existem vários resíduos com valor absoluto maior que 3.
+
+
+```{r}
+model.data <- augment(reg) %>% mutate(index = 1:n())
+ggplot(model.data, aes(index, .std.resid)) + 
+  geom_point(aes(color = Life.expectancy), alpha = .5) +
+  theme_bw()
+```
+
+### Pontos influentes
+
+```{r}
+influentes <- model.data %>%filter(abs(.std.resid) > 2.5) 
+influentes %>% kbl() %>% kable_styling()
+```
+
+### Fatores de inflação de variância
+
+```{r}
+car::vif(reg)
+```
+#### Como regra geral, um valor VIF que excede 5 (deve ser investiagado) ou 10 (deve ser resolvido) indica uma quantidade problemática de colinearidade. Neste caso a variável **infant.deaths** deve ser investigada.
+
+
+
+```{r fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
+### Plot resíduos
+plotmo::plotres(reg, which = 1:9)
+```
+
+
+Podemos ver novamente a presença de pontos influentes além da aparente falta de normalidade dos resíduos.
+
+
+
+### Teste de normalidade
+```{r}
+shapiro.test(rstandard(reg))
+```
+Como o valor-p é baixo devemos rejeitar a hipótese nula, ou seja, os resíduos não são normalmente distribuídos.
+
+
+
+## 5.2 Removendo outliers
+
+### Remoção dos pontos influentes
+Vamos remover as observações contidas em `influentes` do conjunto de treinamento
+```{r}
+treinamento2 <- treinamento[-which(aux > (4 / nrow(treinamento))), ]
+```
+
+```{r}
+reg2 <- lm(Life.expectancy ~ Country + Year + Adult.Mortality + infant.deaths 
+          + Polio + Total.expenditure + HIV.AIDS + Schooling, data = treinamento2)
+```
+O valor de $R^2$ ajustado aumentou para 0.9874.
+
+
+### Distância de Cook
+```{r}
+plot(reg2, which = 4, id.n = 3)
+```
+
+```{r}
+aux <- cooks.distance(reg2)
+length(aux[which(aux > (4 / nrow(treinamento2)))])
+```
+Temos 112 pontos influentes.
+
+### Remoção dos pontos influentes
+Vamos remover as observações contidas em `influentes` do conjunto de treinamento
+
+```{r}
+aux <- cooks.distance(reg2)
+treinamento3 <- treinamento2[-which(aux > (4 / nrow(treinamento2))), ]
+```
+
+```{r}
+reg3 <- lm(Life.expectancy ~ Country + Year + Adult.Mortality + infant.deaths 
+          + Polio + Total.expenditure + HIV.AIDS + Schooling, data = treinamento3)
+```
+
+
+
+
+### Distância de Cook
+```{r}
+plot(reg3, which = 4, id.n = 3)
+```
+```{r}
+aux <- cooks.distance(reg3)
+length(aux[which(aux > (4 / nrow(treinamento3)))])
+```
+
+Temos 105 pontos influentes.
+
+
+
+### Remoção dos pontos influentes
+Vamos remover as observações contidas em `influentes` do conjunto de treinamento
+
+```{r}
+aux <- cooks.distance(reg3)
+treinamento4 <- treinamento3[-which(aux > (4 / nrow(treinamento3))), ]
+```
+
+```{r}
+reg4 <- lm(Life.expectancy ~ Country + Year + Adult.Mortality + infant.deaths 
+          + Polio + Total.expenditure + HIV.AIDS + Schooling, data = treinamento4)
+```
+
+
+
+### Distância de Cook
+```{r}
+plot(reg4, which = 4, id.n = 3)
+```
+
+
+```{r}
+aux <- cooks.distance(reg4)
+length(aux[which(aux > (4 / nrow(treinamento4)))])
+```
+
+Temos 89 pontos influentes.
+
+
+
+### Remoção dos pontos influentes
+Vamos remover as observações contidas em `influentes` do conjunto de treinamento
+
+```{r}
+aux <- cooks.distance(reg4)
+treinamento5 <- treinamento4[-which(aux > (4 / nrow(treinamento4))), ]
+```
+
+```{r}
+reg5 <- lm(Life.expectancy ~ Country + Year + Adult.Mortality + infant.deaths 
+          + Polio + Total.expenditure + HIV.AIDS + Schooling, data = treinamento5)
+```
+
+
+
+### Distância de Cook
+```{r}
+plot(reg5, which = 4, id.n = 3)
+```
+
+
+```{r}
+aux <- cooks.distance(reg5)
+length(aux[which(aux > (4 / nrow(treinamento5)))])
+```
+
+Temos 86 pontos influentes.
+
+
+
+### Remoção dos pontos influentes
+Vamos remover as observações contidas em `influentes` do conjunto de treinamento
+
+```{r}
+aux <- cooks.distance(reg5)
+treinamento6 <- treinamento5[-which(aux > (4 / nrow(treinamento5))), ]
+```
+
+```{r}
+reg6 <- lm(Life.expectancy ~ Country + Year + Adult.Mortality + infant.deaths 
+          + Polio + Total.expenditure + HIV.AIDS + Schooling, data = treinamento6)
+```
+
+
+
+### Distância de Cook
+```{r}
+plot(reg6, which = 4, id.n = 3)
+```
+
+
+```{r}
+aux <- cooks.distance(reg6)
+length(aux[which(aux > (4 / nrow(treinamento6)))])
+```
+
+Temos 63 pontos influentes.
+
+
+
+### Remoção dos pontos influentes
+Vamos remover as observações contidas em `influentes` do conjunto de treinamento
+
+```{r}
+aux <- cooks.distance(reg6)
+treinamento7 <- treinamento6[-which(aux > (4 / nrow(treinamento6))), ]
+```
+
+```{r}
+reg7 <- lm(Life.expectancy ~ Country + Year + Adult.Mortality + infant.deaths 
+          + Polio + Total.expenditure + HIV.AIDS + Schooling, data = treinamento7)
+```
+
+
+
+### Distância de Cook
+```{r}
+plot(reg7, which = 4, id.n = 3)
+```
+
+
+```{r}
+aux <- cooks.distance(reg4)
+length(aux[which(aux > (4 / nrow(treinamento7)))])
+```
+
+Temos 56 pontos influentes.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Remoção dos pontos influentes
+Vamos remover as observações contidas em `influentes` do conjunto de treinamento
+
+```{r}
+aux <- cooks.distance(reg7)
+treinamento8 <- treinamento7[-which(aux > (4 / nrow(treinamento7))), ]
+```
+
+```{r}
+reg8 <- lm(Life.expectancy ~ Country + Year + Adult.Mortality + infant.deaths 
+          + Polio + Total.expenditure + HIV.AIDS + Schooling, data = treinamento8)
+summary(reg8)
+```
+
+
+
+### Distância de Cook
+```{r}
+plot(reg8, which = 4, id.n = 3)
+```
+
+
+```{r}
+aux <- cooks.distance(reg8)
+length(aux[which(aux > (4 / nrow(treinamento8)))])
+```
+
+Temos 23 pontos influentes. Aparentemente não há como remover todos os pontos influentes (testei mais algumas vezes e eles começaram a aumentar em quantidade).
+
+
+### Plot dos resíduos
+Resíduos (de student) com valor absoluto maior que 3 são pontos influentes
+```{r}
+model.data <- augment(reg8) %>% mutate(index = 1:n())
+ggplot(model.data, aes(index, .std.resid)) + 
+  geom_point(aes(color = Life.expectancy), alpha = .5) +
+  theme_bw()
+```
+
+Não há uma maior concentração dos resíduos próximo de zero (como era de se esperar em uma distribuição normal).
+
+
+
+
+
+
+```{r}
+qqnorm(rstandard(reg8))
+qqline(rstandard(reg8))
+```
+Graficamente poderíamos ser levados a aceitar a normalidade dos resíduos.
+
+
+### Teste de normalidade
+```{r}
+shapiro.test(rstandard(reg8))
+```
+
+Rejeitamos a normalidade dos resíduos.
+
+
+
+
+# Conclusão
+
+O conjunto de dados apresentava diversas fatores que dificultam a análise, o que o torna interessante para estudos. No final obtemios um modelo (reg8) com $R^2$ extremamente alto, 0.9988, e o qqplot até poderia ser usado para justificar a normalidade (ou seja, há argumentos para tentar justificar que o modelo é bom), porém uma análise mais minusciosa mostra que o modelo não está adequado e possui falhas graves quanto às suposições de ausência de outliers e normalidade dos resíduos.
+
+Os dados foram obtidos em https://www.kaggle.com/kumarajarshi/life-expectancy-who. Na seção de discussões algumas pessoas destaram justamente estas inconsisências do banco de dados.
+
+
+
