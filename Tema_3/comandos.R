@@ -6,7 +6,7 @@ rm(list = ls())
 # mostra o diretório padrão q os arquivos estão salvos:
 getwd()
 #seta pastas de trabalho, não precisa colocar o caminho completo na leitura de arq.
-setwd("C:/0-BK/0-Vscode/data_science/R_statistic/")
+setwd("C:/0-BK/0-Vscode/R_Programming/")
 
 library(datasets)
 

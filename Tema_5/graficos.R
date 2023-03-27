@@ -1,4 +1,5 @@
 library(readxl)
+setwd("C:/0-BK/0-Vscode/R_Programming/")
 
 dados <- read_excel('Tema_3/dados.xlsx', col_types = c('text', 'numeric', 'text', 'numeric', 'text'), na = 'NA')
 
